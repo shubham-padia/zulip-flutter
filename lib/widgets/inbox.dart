@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../api/model/model.dart';
@@ -25,29 +27,22 @@ class InboxPageBody extends StatefulWidget {
   State<InboxPageBody> createState() => _InboxPageState();
 }
 
-
 /// The interface for the state of an [InboxPageBody].
 abstract class InboxPageState extends State<InboxPageBody> {
-  void collapseStream(int streamId);
-  void uncollapseStream(int streamId);
+  void setChannelCollapsed(int channelId, bool collapsed);
 }
 
-class _InboxPageState extends State<InboxPageBody> with PerAccountStoreAwareStateMixin<InboxPageBody> implements InboxPageState{
+class _InboxPageState extends State<InboxPageBody> with PerAccountStoreAwareStateMixin<InboxPageBody> implements InboxPageState {
   Unreads? unreadsModel;
   RecentDmConversationsView? recentDmConversationsModel;
 
-  Set<int> get collapsedStreamIds => _collapsedStreamIds;
-  final Set<int> _collapsedStreamIds = {};
   @override
-  void collapseStream(int streamId) {
+  void setChannelCollapsed(int channelId, bool collapsed) {
+    final store = PerAccountStoreWidget.of(context);
     setState(() {
-      _collapsedStreamIds.add(streamId);
-    });
-  }
-  @override
-  void uncollapseStream(int streamId) {
-    setState(() {
-      _collapsedStreamIds.remove(streamId);
+      // The store updates its in-memory state synchronously;
+      // only the write to the database is async.
+      unawaited(store.setInboxChannelCollapsed(channelId, collapsed));
     });
   }
 
@@ -70,15 +65,8 @@ class _InboxPageState extends State<InboxPageBody> with PerAccountStoreAwareStat
 
   void _modelChanged() {
     setState(() {
-      // Much of the state lives in [unreadsModel] and
-      // [recentDmConversationsModel].
+      // The state lives in [unreadsModel] and [recentDmConversationsModel].
       // This method was called because one of those just changed.
-      //
-      // We also update some state that lives locally: we reset a collapsible
-      // row's collapsed state when it's cleared of unreads.
-      // TODO(perf) handle those updates efficiently
-      collapsedStreamIds.removeWhere((streamId) =>
-        !unreadsModel!.streams.containsKey(streamId));
     });
   }
 
@@ -192,7 +180,7 @@ class _InboxPageState extends State<InboxPageBody> with PerAccountStoreAwareStat
             case _InboxListItemDmConversation(:final narrow, :final count, :final hasMention):
               return InboxDmItem(narrow: narrow, count: count, hasMention: hasMention);
             case _InboxListItemChannelSection(:var streamId):
-              final collapsed = collapsedStreamIds.contains(streamId);
+              final collapsed = store.isInboxChannelCollapsed(streamId);
               return _StreamSection(data: item, collapsed: collapsed, pageState: this);
           }
         }));
@@ -407,13 +395,13 @@ class InboxChannelHeaderItem extends StatelessWidget {
 
   void _onCollapseButtonTap() async {
     if (collapsed) {
-      pageState.uncollapseStream(subscription.streamId);
+      pageState.setChannelCollapsed(subscription.streamId, false);
     } else {
       await Scrollable.ensureVisible(
         sectionContext,
         alignmentPolicy: ScrollPositionAlignmentPolicy.keepVisibleAtStart,
       );
-      pageState.collapseStream(subscription.streamId);
+      pageState.setChannelCollapsed(subscription.streamId, true);
     }
   }
 
@@ -494,7 +482,7 @@ class _StreamSection extends StatelessWidget {
 
   final _InboxListItemChannelSection data;
   final bool collapsed;
-  final _InboxPageState pageState;
+  final InboxPageState pageState;
 
   @override
   Widget build(BuildContext context) {

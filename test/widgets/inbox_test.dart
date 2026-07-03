@@ -68,6 +68,7 @@ void main() {
     List<User>? users,
     required List<Message> unreadMessages,
     List<Message>? otherMessages,
+    List<int>? collapsedChannelIds,
     NavigatorObserver? navigatorObserver,
   }) async {
     addTearDown(testBinding.reset);
@@ -82,6 +83,10 @@ void main() {
     for (final message in unreadMessages) {
       assert(!message.flags.contains(MessageFlag.read));
       await store.addMessage(message);
+    }
+
+    for (final channelId in collapsedChannelIds ?? const <int>[]) {
+      await store.setInboxChannelCollapsed(channelId, true);
     }
 
     await tester.pumpWidget(TestZulipApp(
@@ -647,9 +652,55 @@ void main() {
           await tapCollapseIcon(tester, subscription);
           checkChannelHeader(tester, subscription,
             expectCollapsed: true, findSectionContent: findSectionContent);
+          check(store.isInboxChannelCollapsed(1)).isTrue();
           await tapCollapseIcon(tester, subscription);
           checkChannelHeader(tester, subscription,
             expectCollapsed: false, findSectionContent: findSectionContent);
+          check(store.isInboxChannelCollapsed(1)).isFalse();
+        });
+
+        testWidgets('starts collapsed when saved in store', (tester) async {
+          // The collapsed state loaded from the database is what makes
+          // collapsed channels persist across runs of the app.
+          final stream = eg.stream(streamId: 1);
+          await setupPage(tester,
+            streams: [stream],
+            subscriptions: [eg.subscription(stream)],
+            collapsedChannelIds: [1],
+            unreadMessages: [eg.streamMessage(stream: stream,
+              topic: 'specific topic', flags: [])]);
+          checkChannelHeader(tester, store.subscriptions[1]!,
+            expectCollapsed: true, findSectionContent: find.text('specific topic'));
+        });
+
+        testWidgets('remains collapsed when cleared of unreads, then reappearing', (tester) async {
+          final stream = eg.stream(streamId: 1);
+          final message = eg.streamMessage(stream: stream,
+            topic: 'specific topic', flags: []);
+          await setupPage(tester,
+            streams: [stream],
+            subscriptions: [eg.subscription(stream)],
+            unreadMessages: [message]);
+          final subscription = store.subscriptions[1]!;
+
+          await tapCollapseIcon(tester, subscription);
+          checkChannelHeader(tester, subscription, expectCollapsed: true);
+
+          // The channel disappears from the inbox when all its messages are read.
+          await store.handleEvent(UpdateMessageFlagsAddEvent(
+            id: 0, flag: MessageFlag.read, messages: [message.id], all: false));
+          await tester.pump();
+          check(find.byWidgetPredicate((widget) =>
+            widget is InboxChannelHeaderItem
+            && widget.subscription.streamId == 1)).findsNothing();
+
+          // When a new unread arrives, the channel reappears, still collapsed,
+          // like in the web app.
+          await store.addMessage(eg.streamMessage(stream: stream,
+            topic: 'specific topic', flags: []));
+          await tester.pump();
+          checkChannelHeader(tester, subscription,
+            expectCollapsed: true, findSectionContent: find.text('specific topic'));
         });
 
         testWidgets('uncollapsed header changes background color when [subscription.color] changes', (tester) async {
@@ -723,12 +774,6 @@ void main() {
         });
 
         // TODO check it remains collapsed even if you scroll far away and back
-
-        // TODO check that it's always uncollapsed when it appears after being
-        //   absent, even if it was collapsed the last time it was present.
-        //   (Could test multiple triggers for its reappearance: it could
-        //   reappear because a new unread arrived, but with #346 it could also
-        //   reappear because you unmuted a conversation.)
       });
     });
 
