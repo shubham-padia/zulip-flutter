@@ -207,6 +207,18 @@ class PushKeys extends Table {
   ];
 }
 
+/// The table of which channels the user has collapsed on the inbox page,
+/// one row per collapsed channel.
+class InboxCollapsedChannels extends Table {
+  Column<int> get accountId => integer()
+    .references(Accounts, #id, onDelete: .cascade)();
+
+  Column<int> get channelId => integer()();
+
+  @override
+  Set<Column<Object>>? get primaryKey => {accountId, channelId};
+}
+
 class UriConverter extends TypeConverter<Uri, String> {
   const UriConverter();
   @override String toSql(Uri value) => value.toString();
@@ -215,7 +227,7 @@ class UriConverter extends TypeConverter<Uri, String> {
 
 const _allTables = [
   GlobalSettings, BoolGlobalSettings, IntGlobalSettings,
-  Accounts, PushKeys,
+  Accounts, PushKeys, InboxCollapsedChannels,
 ];
 
 @DriftDatabase(tables: _allTables)
@@ -230,7 +242,7 @@ class AppDatabase extends _$AppDatabase {
   //  * Fix resulting analyzer errors; in particular,
   //    write a migration in `_migrationSteps` below.
   //  * Write tests.
-  static const int latestSchemaVersion = 16; // See note.
+  static const int latestSchemaVersion = 17; // See note.
 
   @override
   int get schemaVersion => latestSchemaVersion;
@@ -341,6 +353,9 @@ class AppDatabase extends _$AppDatabase {
     from15To16: (m, schema) async {
       await m.addColumn(schema.accounts, schema.accounts.possibleLegacyPushToken);
     },
+    from16To17: (m, schema) async {
+      await m.createTable(schema.inboxCollapsedChannels);
+    },
   );
 
   Future<void> _createLatestSchema(Migrator m) async {
@@ -436,6 +451,24 @@ class AppDatabase extends _$AppDatabase {
         throw PushKeyAlreadyExistsException();
       }
       rethrow;
+    }
+  }
+
+  /// Set or unset the given channel as collapsed on the inbox page.
+  ///
+  /// A call that matches the existing state is a no-op:
+  /// callers may make redundant calls, when several are in flight at once.
+  Future<void> setInboxChannelCollapsed(int accountId, int channelId, bool collapsed) async {
+    if (collapsed) {
+      await into(inboxCollapsedChannels).insert(
+        InboxCollapsedChannelsCompanion.insert(
+          accountId: accountId, channelId: channelId),
+        mode: InsertMode.insertOrIgnore);
+    } else {
+      await (delete(inboxCollapsedChannels)
+        ..where((r) => r.accountId.equals(accountId)
+                       & r.channelId.equals(channelId))
+      ).go();
     }
   }
 }

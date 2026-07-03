@@ -296,6 +296,40 @@ void main() {
         .go();
       check(await db.select(db.pushKeys).get()).isEmpty();
     });
+
+    test('set inbox channel collapsed and uncollapsed', () async {
+      await db.createAccount(eg.selfAccount.toCompanion(false));
+      await db.setInboxChannelCollapsed(eg.selfAccount.id, 7, true);
+      check(await db.select(db.inboxCollapsedChannels).get()).single
+        ..accountId.equals(eg.selfAccount.id)
+        ..channelId.equals(7);
+
+      await db.setInboxChannelCollapsed(eg.selfAccount.id, 7, false);
+      check(await db.select(db.inboxCollapsedChannels).get()).isEmpty();
+    });
+
+    test('set inbox channel collapsed, redundant calls are no-ops', () async {
+      // Overlapping calls from the model can each reach the database
+      // before either's effect is visible to the other's caller.
+      await db.createAccount(eg.selfAccount.toCompanion(false));
+      await db.setInboxChannelCollapsed(eg.selfAccount.id, 7, true);
+      await db.setInboxChannelCollapsed(eg.selfAccount.id, 7, true);
+      check(await db.select(db.inboxCollapsedChannels).get()).length.equals(1);
+
+      await db.setInboxChannelCollapsed(eg.selfAccount.id, 7, false);
+      await db.setInboxChannelCollapsed(eg.selfAccount.id, 7, false);
+      check(await db.select(db.inboxCollapsedChannels).get()).isEmpty();
+    });
+
+    test('delete account cascades to inbox collapsed channels', () async {
+      await db.createAccount(eg.selfAccount.toCompanion(false));
+      await db.setInboxChannelCollapsed(eg.selfAccount.id, 7, true);
+      check(await db.select(db.inboxCollapsedChannels).get()).length.equals(1);
+
+      await (db.delete(db.accounts)..where((a) => a.id.equals(eg.selfAccount.id)))
+        .go();
+      check(await db.select(db.inboxCollapsedChannels).get()).isEmpty();
+    });
   });
 
   group('migrations', () {
@@ -511,6 +545,8 @@ void main() {
     // v15 covered by "existing Account row" above
 
     // v16 covered by "existing Account row" above
+
+    // v17 only adds a new table; the "migrate without data" test covers it
   });
 }
 

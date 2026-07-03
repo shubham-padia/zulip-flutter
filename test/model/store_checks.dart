@@ -40,6 +40,11 @@ extension PushKeyChecks on Subject<PushKey> {
   Subject<int?> get supersededTimestamp => has((x) => x.supersededTimestamp, 'supersededTimestamp');
 }
 
+extension InboxCollapsedChannelChecks on Subject<InboxCollapsedChannel> {
+  Subject<int> get accountId => has((x) => x.accountId, 'accountId');
+  Subject<int> get channelId => has((x) => x.channelId, 'channelId');
+}
+
 extension GlobalSettingsStoreChecks on Subject<GlobalSettingsStore> {
   Subject<ThemeSetting?> get themeSetting => has((x) => x.themeSetting, 'themeSetting');
   Subject<BrowserPreference?> get browserPreference => has((x) => x.browserPreference, 'browserPreference');
