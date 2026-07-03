@@ -28,9 +28,6 @@ class InboxPageBody extends StatefulWidget {
 
 /// The interface for the state of an [InboxPageBody].
 abstract class InboxPageState extends State<InboxPageBody> {
-  bool get allDmsCollapsed;
-  set allDmsCollapsed(bool value);
-
   void collapseStream(int streamId);
   void uncollapseStream(int streamId);
 }
@@ -38,16 +35,6 @@ abstract class InboxPageState extends State<InboxPageBody> {
 class _InboxPageState extends State<InboxPageBody> with PerAccountStoreAwareStateMixin<InboxPageBody> implements InboxPageState{
   Unreads? unreadsModel;
   RecentDmConversationsView? recentDmConversationsModel;
-
-  @override
-  bool get allDmsCollapsed => _allDmsCollapsed;
-  bool _allDmsCollapsed = false;
-  @override
-  set allDmsCollapsed(bool value) {
-    setState(() {
-      _allDmsCollapsed = value;
-    });
-  }
 
   Set<int> get collapsedStreamIds => _collapsedStreamIds;
   final Set<int> _collapsedStreamIds = {};
@@ -92,9 +79,6 @@ class _InboxPageState extends State<InboxPageBody> with PerAccountStoreAwareStat
       // TODO(perf) handle those updates efficiently
       collapsedStreamIds.removeWhere((streamId) =>
         !unreadsModel!.streams.containsKey(streamId));
-      if (unreadsModel!.dms.isEmpty) {
-        allDmsCollapsed = false;
-      }
     });
   }
 
@@ -414,9 +398,9 @@ class InboxChannelHeaderItem extends StatelessWidget {
   final int count;
   final bool hasMention;
 
-  /// A build context within the [_StreamSection] or [_AllDmsSection].
+  /// A build context within the [_StreamSection].
   ///
-  /// Used to ensure the [_StreamSection] or [_AllDmsSection] that encloses the
+  /// Used to ensure the [_StreamSection] that encloses the
   /// current [InboxFolderHeaderItem] is visible after being collapsed through this
   /// [InboxFolderHeaderItem].
   final BuildContext sectionContext;
