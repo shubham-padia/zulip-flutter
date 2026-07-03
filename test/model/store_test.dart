@@ -574,6 +574,58 @@ void main() {
     });
   });
 
+  group('GlobalStore.setInboxChannelCollapsed', () {
+    InboxCollapsedChannel mkRow(Account account, int channelId) {
+      return InboxCollapsedChannel(accountId: account.id, channelId: channelId);
+    }
+
+    test('initial data, keyed by account', () {
+      final globalStore = eg.globalStore(
+        accounts: [eg.selfAccount, eg.otherAccount],
+        inboxCollapsedChannels: [
+          mkRow(eg.selfAccount, 1),
+          mkRow(eg.selfAccount, 2),
+          mkRow(eg.otherAccount, 3),
+        ]);
+
+      check(globalStore.isInboxChannelCollapsed(eg.selfAccount.id, 1)).isTrue();
+      check(globalStore.isInboxChannelCollapsed(eg.selfAccount.id, 2)).isTrue();
+      check(globalStore.isInboxChannelCollapsed(eg.selfAccount.id, 3)).isFalse();
+      check(globalStore.isInboxChannelCollapsed(eg.otherAccount.id, 3)).isTrue();
+      check(globalStore.isInboxChannelCollapsed(eg.otherAccount.id, 1)).isFalse();
+    });
+
+    test('collapse and uncollapse channel', () async {
+      final globalStore = eg.globalStore(accounts: [eg.selfAccount]);
+      await globalStore.setInboxChannelCollapsed(eg.selfAccount.id, 1, true);
+      check(globalStore.isInboxChannelCollapsed(eg.selfAccount.id, 1)).isTrue();
+
+      await globalStore.setInboxChannelCollapsed(eg.selfAccount.id, 1, false);
+      check(globalStore.isInboxChannelCollapsed(eg.selfAccount.id, 1)).isFalse();
+    });
+
+    test('state survives per-account store replacement', () async {
+      // This is what happens when the event queue expires
+      // and a new per-account store is loaded.
+      final globalStore = eg.globalStore(accounts: [eg.selfAccount]);
+      final store1 = eg.store(globalStore: globalStore, account: eg.selfAccount);
+      await store1.setInboxChannelCollapsed(1, true);
+      store1.dispose();
+
+      final store2 = eg.store(globalStore: globalStore, account: eg.selfAccount);
+      check(store2.isInboxChannelCollapsed(1)).isTrue();
+    });
+
+    test('removeAccount clears account data', () async {
+      final globalStore = eg.globalStore(accounts: [eg.selfAccount],
+        inboxCollapsedChannels: [mkRow(eg.selfAccount, 1)]);
+      check(globalStore.isInboxChannelCollapsed(eg.selfAccount.id, 1)).isTrue();
+
+      await globalStore.removeAccount(eg.selfAccount.id);
+      check(globalStore.isInboxChannelCollapsed(eg.selfAccount.id, 1)).isFalse();
+    });
+  });
+
   group('PerAccountStore.handleEvent', () {
     // Mostly this method just dispatches to ChannelStore and MessageStore etc.,
     // and so its tests generally live in the test files for those

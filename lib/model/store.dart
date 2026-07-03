@@ -43,7 +43,7 @@ import 'user.dart';
 import 'user_group.dart';
 
 export 'package:drift/drift.dart' show Value;
-export 'database.dart' show Account, AccountsCompanion, AccountAlreadyExistsException, PushKey;
+export 'database.dart' show Account, AccountsCompanion, AccountAlreadyExistsException, InboxCollapsedChannel, PushKey;
 
 /// An underlying data store that can support a [GlobalStore],
 /// possibly storing the data to persist between runs of the app.
@@ -84,6 +84,12 @@ abstract class GlobalStoreBackend {
   ///
   /// This should only be called from [GlobalPushKeyStore].
   Future<void> doRemovePushKey(int pushKeyId);
+
+  /// Set or unset the given channel as collapsed on the inbox page,
+  /// in the underlying data store.
+  ///
+  /// This should only be called from [GlobalStore.setInboxChannelCollapsed].
+  Future<void> doSetInboxChannelCollapsed(int accountId, int channelId, bool collapsed);
 }
 
 /// Store for all the user's data.
@@ -110,12 +116,25 @@ abstract class GlobalStore extends ChangeNotifier {
     required Map<IntGlobalSetting, int> intGlobalSettings,
     required Iterable<Account> accounts,
     required Iterable<PushKey> pushKeys,
+    required Iterable<InboxCollapsedChannel> inboxCollapsedChannels,
   })
-    : settings = GlobalSettingsStore(backend: backend,
+    : _backend = backend,
+      settings = GlobalSettingsStore(backend: backend,
         data: globalSettings, boolData: boolGlobalSettings, intData: intGlobalSettings),
       pushKeys = GlobalPushKeyStore(backend: backend,
         data: pushKeys),
+      _inboxCollapsedChannels = _buildInboxCollapsedChannels(inboxCollapsedChannels),
       _accounts = Map.fromEntries(accounts.map((a) => MapEntry(a.id, a)));
+
+  static Map<int, Set<int>> _buildInboxCollapsedChannels(Iterable<InboxCollapsedChannel> data) {
+    final result = <int, Set<int>>{};
+    for (final row in data) {
+      (result[row.accountId] ??= {}).add(row.channelId);
+    }
+    return result;
+  }
+
+  final GlobalStoreBackend _backend;
 
   /// The store for the user's account-independent settings.
   ///
@@ -126,6 +145,42 @@ abstract class GlobalStore extends ChangeNotifier {
   final GlobalSettingsStore settings;
 
   final GlobalPushKeyStore pushKeys;
+
+  /// Which channels the user has collapsed on the inbox page,
+  /// as channel IDs keyed by account ID.
+  ///
+  /// This is data that lives locally on the user's device,
+  /// and doesn't correspond to anything on the server.
+  ///
+  /// A channel stays collapsed until the user expands it again;
+  /// in particular the state persists across runs of the app,
+  /// and doesn't reset when the channel has no unread messages.
+  /// This matches the inbox view in the Zulip web app.
+  final Map<int, Set<int>> _inboxCollapsedChannels;
+
+  /// Whether the user has collapsed the given channel on the inbox page.
+  ///
+  /// See [_inboxCollapsedChannels].
+  bool isInboxChannelCollapsed(int accountId, int channelId) =>
+    _inboxCollapsedChannels[accountId]?.contains(channelId) ?? false;
+
+  /// Set or unset the given channel as collapsed on the inbox page,
+  /// in this store and the underlying data store.
+  ///
+  /// If the channel's collapsed state already matches [collapsed],
+  /// nothing happens.
+  ///
+  /// This deliberately has no change notification: the inbox page
+  /// is the only reader and writer of this state, and rebuilds
+  /// itself when it writes.  If some other caller starts writing
+  /// this state, it will need to notify the inbox page somehow;
+  /// see [GlobalSettingsStore] for the pattern to use.
+  Future<void> setInboxChannelCollapsed(int accountId, int channelId, bool collapsed) async {
+    final channelIds = _inboxCollapsedChannels[accountId] ??= {};
+    final changed = collapsed ? channelIds.add(channelId) : channelIds.remove(channelId);
+    if (!changed) return;
+    await _backend.doSetInboxChannelCollapsed(accountId, channelId, collapsed);
+  }
 
   /// Construct a new [ApiConnection], real or fake as appropriate.
   ///
@@ -455,6 +510,10 @@ abstract class GlobalStore extends ChangeNotifier {
     _perAccountStores.remove(accountId)?.dispose();
     unawaited(_perAccountStoresLoading.remove(accountId));
     pushKeys.removeAccount(accountId);
+    // The rows should be already gone from the database, because
+    // we have cascading deletes on the foreign key
+    // at [InboxCollapsedChannels.accountId].
+    _inboxCollapsedChannels.remove(accountId);
     notifyListeners();
   }
 
@@ -590,6 +649,16 @@ abstract class PerAccountStoreBase {
   }
 
   PushKeyStore get pushKeys => _globalStore.pushKeys.perAccount(accountId);
+
+  /// Whether the user has collapsed the given channel on the inbox page.
+  bool isInboxChannelCollapsed(int channelId) =>
+    _globalStore.isInboxChannelCollapsed(accountId, channelId);
+
+  /// Set or unset the given channel as collapsed on the inbox page.
+  ///
+  /// See [GlobalStore.setInboxChannelCollapsed].
+  Future<void> setInboxChannelCollapsed(int channelId, bool collapsed) =>
+    _globalStore.setInboxChannelCollapsed(accountId, channelId, collapsed);
 }
 
 const _tryResolveUrl = tryResolveUrl;
@@ -1139,6 +1208,11 @@ class LiveGlobalStoreBackend implements GlobalStoreBackend {
     ).go();
     assert(rowsAffected == 1);
   }
+
+  @override
+  Future<void> doSetInboxChannelCollapsed(int accountId, int channelId, bool collapsed) async {
+    await _db.setInboxChannelCollapsed(accountId, channelId, collapsed);
+  }
 }
 
 /// A [GlobalStore] that uses a live server and live, persistent local database.
@@ -1150,13 +1224,14 @@ class LiveGlobalStoreBackend implements GlobalStoreBackend {
 /// and will have an associated [UpdateMachine].
 class LiveGlobalStore extends GlobalStore {
   LiveGlobalStore._({
-    required this._backend,
+    required LiveGlobalStoreBackend backend,
     required super.globalSettings,
     required super.boolGlobalSettings,
     required super.intGlobalSettings,
     required super.accounts,
     required super.pushKeys,
-  }) : super(backend: _backend);
+    required super.inboxCollapsedChannels,
+  }) : super(backend: backend);
 
   @override
   ApiConnection apiConnection({
@@ -1191,13 +1266,16 @@ class LiveGlobalStore extends GlobalStore {
     final t5 = stopwatch.elapsed;
     final pushKeys = await db.select(db.pushKeys).get();
     final t6 = stopwatch.elapsed;
+    final inboxCollapsedChannels = await db.select(db.inboxCollapsedChannels).get();
+    final t7 = stopwatch.elapsed;
     if (kProfileMode) {
       String format(Duration d) =>
         "${(d.inMicroseconds / 1000.0).toStringAsFixed(1)}ms";
-      profilePrint("db load time ${format(t5)} total: ${format(t1)} init, "
+      profilePrint("db load time ${format(t7)} total: ${format(t1)} init, "
         "${format(t2 - t1)} settings, ${format(t3 - t2)} bool-settings, "
         "${format(t4 - t3)} int-settings, "
-        "${format(t5 - t4)} accounts, ${format(t6 - t5)} push keys");
+        "${format(t5 - t4)} accounts, ${format(t6 - t5)} push keys, "
+        "${format(t7 - t6)} inbox collapsed channels");
     }
 
     // Disable OS backups for the database file, see:
@@ -1213,6 +1291,7 @@ class LiveGlobalStore extends GlobalStore {
       intGlobalSettings: intGlobalSettings,
       accounts: accounts,
       pushKeys: pushKeys,
+      inboxCollapsedChannels: inboxCollapsedChannels,
     );
   }
 
@@ -1344,7 +1423,8 @@ class LiveGlobalStore extends GlobalStore {
     }
   }
 
-  final LiveGlobalStoreBackend _backend;
+  @override
+  LiveGlobalStoreBackend get _backend => super._backend as LiveGlobalStoreBackend;
 
   // The methods that use this should probably all move to [GlobalStoreBackend]
   // and [LiveGlobalStoreBackend] anyway (see comment on the former);

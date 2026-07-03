@@ -1372,6 +1372,7 @@ TestGlobalStore globalStore({
   Map<IntGlobalSetting, int>? intGlobalSettings,
   List<Account> accounts = const [],
   Iterable<PushKey>? pushKeys,
+  Iterable<InboxCollapsedChannel>? inboxCollapsedChannels,
 }) {
   return TestGlobalStore(
     globalSettings: globalSettings,
@@ -1379,6 +1380,7 @@ TestGlobalStore globalStore({
     intGlobalSettings: intGlobalSettings,
     accounts: accounts,
     pushKeys: pushKeys,
+    inboxCollapsedChannels: inboxCollapsedChannels,
   );
 }
 const _globalStore = globalStore;
